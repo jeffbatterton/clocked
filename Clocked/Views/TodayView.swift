@@ -112,23 +112,20 @@ private struct RisingArea: View {
     }
 }
 
-/// Today's sessions laid out on a horizontal day. One row per company, the selected one on
-/// top in full colour. The axis runs between the times set in Preferences, and grows to fit
-/// any session that falls outside them.
+/// Today's sessions for the selected company laid out on a horizontal day, each block the
+/// full height of the track. Other companies' time is left out. The axis runs between the
+/// times set in Preferences, and grows to fit any session that falls outside them.
 struct TimelineModel {
     struct Block: Identifiable {
         let id: UUID
-        let companyID: UUID
-        let lane: Int
         let start: TimeInterval
         let end: TimeInterval
         let startDate: Date
         let endDate: Date?
     }
 
-    var lanes: [Company] = []
     var blocks: [Block] = []
-    var totals: [UUID: TimeInterval] = [:]
+    var total: TimeInterval = 0
     var rangeStart: TimeInterval
     var rangeEnd: TimeInterval
     var configuredStart: TimeInterval
@@ -136,30 +133,22 @@ struct TimelineModel {
     var now: TimeInterval
 
     @MainActor
-    init(store: TimeStore, prefs: Preferences, selectedID: UUID) {
+    init(store: TimeStore, prefs: Preferences, companyID: UUID) {
         let dayStart = store.startOfDay(store.now)
         configuredStart = TimeInterval(prefs.timelineStartHour) * 3600
         configuredEnd = TimeInterval(prefs.timelineEndHour) * 3600
         now = store.now.timeIntervalSince(dayStart)
 
         let todays = store.sessions
-            .filter { store.startOfDay($0.start) == dayStart && store.company($0.companyID) != nil }
+            .filter { $0.companyID == companyID && store.startOfDay($0.start) == dayStart }
             .sorted { $0.start < $1.start }
-        var order: [UUID] = todays.contains { $0.companyID == selectedID } ? [selectedID] : []
-        for session in todays where !order.contains(session.companyID) {
-            order.append(session.companyID)
-        }
-        lanes = order.compactMap(store.company)
 
         var low = configuredStart, high = configuredEnd
         for session in todays {
             let a = session.start.timeIntervalSince(dayStart)
             let b = max(a, (session.end ?? store.now).timeIntervalSince(dayStart))
-            totals[session.companyID, default: 0] += b - a
-            blocks.append(Block(
-                id: session.id, companyID: session.companyID, lane: order.firstIndex(of: session.companyID) ?? 0,
-                start: a, end: b, startDate: session.start, endDate: session.end
-            ))
+            total += b - a
+            blocks.append(Block(id: session.id, start: a, end: b, startDate: session.start, endDate: session.end))
             low = min(low, (a / 3600).rounded(.down) * 3600)
             high = max(high, (b / 3600).rounded(.up) * 3600)
         }
@@ -180,25 +169,22 @@ struct DayTimeline: View {
     @Environment(Preferences.self) private var prefs
 
     var body: some View {
-        let model = TimelineModel(store: store, prefs: prefs, selectedID: company.id)
+        let model = TimelineModel(store: store, prefs: prefs, companyID: company.id)
 
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 CapsLabel(text: TimeFormat.longDay(store.now))
                 Spacer(minLength: 12)
-                ForEach(model.lanes) { lane in
-                    HStack(spacing: 5) {
-                        CompanyDot(company: lane, size: 8)
-                            .opacity(lane.id == company.id ? 1 : 0.4)
-                        Text("\(lane.name) \(TimeFormat.duration(model.totals[lane.id] ?? 0))")
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    CompanyDot(company: company, size: 8)
+                    Text("\(company.name) \(TimeFormat.duration(model.total))")
+                        .lineLimit(1)
                 }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             }
             GeometryReader { geo in
-                TimelineTrack(model: model, selectedID: company.id, size: geo.size)
+                TimelineTrack(model: model, company: company, size: geo.size)
             }
             .overlay {
                 if model.blocks.isEmpty {
@@ -216,13 +202,14 @@ struct DayTimeline: View {
 
 private struct TimelineTrack: View {
     let model: TimelineModel
-    let selectedID: UUID
+    let company: Company
     let size: CGSize
 
     @Environment(TimeStore.self) private var store
 
     private let labelHeight: CGFloat = 18
-    private let topInset: CGFloat = 14
+    /// Room above the blocks for the current time on the now line.
+    private let topInset: CGFloat = 22
 
     private func x(_ t: TimeInterval) -> CGFloat {
         CGFloat((t - model.rangeStart) / (model.rangeEnd - model.rangeStart)) * size.width
@@ -230,7 +217,6 @@ private struct TimelineTrack: View {
 
     var body: some View {
         let trackHeight = max(0, size.height - labelHeight)
-        let slot = (trackHeight - topInset) / CGFloat(max(model.lanes.count, 3))
 
         ZStack(alignment: .topLeading) {
             Canvas { context, _ in
@@ -269,22 +255,25 @@ private struct TimelineTrack: View {
             }
 
             ForEach(model.blocks) { block in
-                if let company = store.company(block.companyID) {
-                    TimelineBlock(block: block, company: company, selected: block.companyID == selectedID)
-                        .frame(width: max(3, x(block.end) - x(block.start)), height: max(0, slot - 8))
-                        .offset(x: x(block.start), y: topInset + CGFloat(block.lane) * slot)
-                }
+                TimelineBlock(block: block, company: company)
+                    .frame(width: max(3, x(block.end) - x(block.start)), height: max(0, trackHeight - topInset - 6))
+                    .offset(x: x(block.start), y: topInset)
             }
 
             if model.now >= model.rangeStart, model.now <= model.rangeEnd {
                 Rectangle()
                     .fill(Theme.live)
-                    .frame(width: 2, height: max(0, trackHeight - 4))
-                    .offset(x: x(model.now) - 1, y: 4)
-                Circle()
-                    .fill(Theme.live)
-                    .frame(width: 8, height: 8)
-                    .offset(x: x(model.now) - 4, y: 0)
+                    .frame(width: 2, height: max(0, trackHeight - 8))
+                    .offset(x: x(model.now) - 1, y: 8)
+                Text(TimeFormat.shortTime(store.now))
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .fixedSize()
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Theme.live, in: RoundedRectangle(cornerRadius: 4))
+                    .position(x: x(model.now), y: 8)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -303,10 +292,10 @@ private struct TimelineTrack: View {
     }
 }
 
+/// One session: its length, then the time range, in the top-left corner.
 private struct TimelineBlock: View {
     let block: TimelineModel.Block
     let company: Company
-    let selected: Bool
 
     private var range: String {
         let start = TimeFormat.shortTime(block.startDate)
@@ -316,6 +305,7 @@ private struct TimelineBlock: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 6)
+        let duration = TimeFormat.duration(block.end - block.start)
         shape
             .fill(Palette.color(company.colorIndex))
             .overlay {
@@ -326,20 +316,19 @@ private struct TimelineBlock: View {
                 GeometryReader { geo in
                     if geo.size.width >= 28 {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(company.name).fontWeight(.semibold)
+                            Text(duration).fontWeight(.semibold)
                             Text(range)
                         }
                         .font(.system(size: 11))
                         .foregroundStyle(.white)
                         .fixedSize()
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 7)
                     }
                 }
             }
             .clipShape(shape)
-            .opacity(selected ? 1 : 0.35)
-            .help("\(company.name) · \(range) · \(TimeFormat.duration(block.end - block.start))")
+            .help("\(company.name) · \(range) · \(duration)")
     }
 }
 

@@ -64,7 +64,7 @@ struct Sidebar: View {
 
     private func row(_ company: Company) -> some View {
         let isSelected = company.id == store.selectedCompanyID
-        let isRunning = store.running?.companyID == company.id
+        let isRunning = store.running(for: company.id) != nil
         let today = store.actualTotal(for: company.id, on: store.currentDay(for: company.id))
 
         return Button { store.selectedCompanyID = company.id } label: {

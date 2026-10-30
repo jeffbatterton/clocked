@@ -78,37 +78,32 @@ final class TimeStore {
     // MARK: Lookup
 
     var selectedCompany: Company? { selectedCompanyID.flatMap(company) }
-    var running: Session? { sessions.last(where: \.isRunning) }
-    /// The company the menu bar talks about: the running one, otherwise the selected one.
-    var currentCompanyID: UUID? { running?.companyID ?? selectedCompanyID }
-    var currentCompany: Company? { currentCompanyID.flatMap(company) }
+    /// Every running timer, the longest-running first. Each company has its own, and any
+    /// number can run at once.
+    var runningSessions: [Session] { sessions.filter(\.isRunning).sorted { $0.start < $1.start } }
+    var isAnyRunning: Bool { sessions.contains(where: \.isRunning) }
+
+    func running(for companyID: UUID) -> Session? {
+        sessions.last { $0.isRunning && $0.companyID == companyID }
+    }
 
     func company(_ id: UUID) -> Company? { companies.first { $0.id == id } }
 
     // MARK: Timer
 
+    /// Starts the company's timer, leaving any other company's timer running.
     func start(_ companyID: UUID) {
-        closeRunning()
+        guard running(for: companyID) == nil else { return }
         sessions.append(Session(companyID: companyID, start: Date()))
         now = Date()
         save()
     }
 
-    func stop() {
-        closeRunning()
+    func stop(_ companyID: UUID) {
+        guard let i = sessions.lastIndex(where: { $0.isRunning && $0.companyID == companyID }) else { return }
+        sessions[i].end = Date()
         now = Date()
         save()
-    }
-
-    /// Selects a company; if a timer is running for another company it moves to this one.
-    func switchTo(_ companyID: UUID) {
-        selectedCompanyID = companyID
-        if let running, running.companyID != companyID { start(companyID) }
-    }
-
-    private func closeRunning() {
-        guard let i = sessions.lastIndex(where: \.isRunning) else { return }
-        sessions[i].end = Date()
     }
 
     // MARK: Companies
@@ -163,10 +158,10 @@ final class TimeStore {
             .reduce(0) { $0 + $1.duration(now: now) }
     }
 
-    /// The day the company's time is counting toward right now: the running session's day
+    /// The day the company's time is counting toward right now: its running session's day
     /// (which can be yesterday after midnight), otherwise today.
     func currentDay(for companyID: UUID) -> Date {
-        if let running, running.companyID == companyID { return startOfDay(running.start) }
+        if let running = running(for: companyID) { return startOfDay(running.start) }
         return startOfDay(now)
     }
 
@@ -194,7 +189,7 @@ final class TimeStore {
 
     /// One entry per day with time, newest first.
     func loggedDays(for companyID: UUID) -> [LoggedDay] {
-        let runningDay = running.flatMap { $0.companyID == companyID ? startOfDay($0.start) : nil }
+        let runningDay = running(for: companyID).map { startOfDay($0.start) }
         return dailyTotals(for: companyID)
             .map { LoggedDay(day: $0.key, seconds: $0.value, isRunning: $0.key == runningDay) }
             .sorted { $0.day > $1.day }
@@ -256,7 +251,7 @@ final class TimeStore {
 
     private func tick() {
         let date = Date()
-        if running != nil || !calendar.isDate(date, equalTo: now, toGranularity: .minute) {
+        if isAnyRunning || !calendar.isDate(date, equalTo: now, toGranularity: .minute) {
             now = date
         }
     }

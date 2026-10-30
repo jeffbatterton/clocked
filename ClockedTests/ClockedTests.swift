@@ -71,16 +71,21 @@ struct StoreTests {
         #expect(store.loggedDays(for: acme.id).isEmpty)
     }
 
-    @Test func switchingCompaniesMovesTheRunningTimer() {
+    @Test func eachCompanyHasItsOwnTimer() {
         let store = makeStore()
         let acme = store.addCompany(name: "Acme", colorIndex: 0)
         let northwind = store.addCompany(name: "Northwind", colorIndex: 1)
         store.start(acme.id)
-        store.switchTo(northwind.id)
+        store.selectedCompanyID = northwind.id
+        #expect(store.running(for: northwind.id) == nil)
 
-        #expect(store.running?.companyID == northwind.id)
-        #expect(store.sessions.filter(\.isRunning).count == 1)
-        #expect(store.sessions.first { $0.companyID == acme.id }?.end != nil)
+        store.start(northwind.id)
+        store.start(northwind.id)
+        #expect(store.runningSessions.map(\.companyID) == [acme.id, northwind.id])
+
+        store.stop(acme.id)
+        #expect(store.running(for: acme.id) == nil)
+        #expect(store.running(for: northwind.id) != nil)
     }
 
     @Test func removingACompanyRemovesItsTime() {
@@ -104,7 +109,7 @@ struct StoreTests {
 
         let reloaded = TimeStore(fileURL: url, ticking: false)
         #expect(reloaded.companies == [acme])
-        #expect(reloaded.running?.companyID == acme.id)
+        #expect(reloaded.running(for: acme.id) != nil)
         #expect(reloaded.selectedCompanyID == acme.id)
     }
 }
@@ -138,7 +143,7 @@ struct TestDriveTests {
 
         store.setTestDrive(false)
         #expect(store.companies == [mine])
-        #expect(store.running?.companyID == mine.id)
+        #expect(store.running(for: mine.id) != nil)
         #expect(store.selectedCompanyID == mine.id)
 
         // The real file never held sample data.

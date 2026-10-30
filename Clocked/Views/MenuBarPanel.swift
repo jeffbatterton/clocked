@@ -1,17 +1,25 @@
 import AppKit
 import SwiftUI
 
-/// The red dot (running) or a clock (stopped) beside today's time, with the current company's
-/// name in tiny type underneath. Live time, not rounded.
+/// One running timer: the red dot beside that company's time today, with its name in tiny
+/// type underneath. Several running: the red dot and "3 timers running". Nothing running: a
+/// clock beside the selected company's time. Live time, not rounded.
 struct MenuBarLabel: View {
     @Environment(TimeStore.self) private var store
 
     var body: some View {
-        let company = store.currentCompany
-        let total = company.map { store.actualTotal(for: $0.id, on: store.currentDay(for: $0.id)) } ?? 0
-        let time = TimeFormat.clock(total)
-        Image(nsImage: MenuBarLabelImage.make(time: time, company: company?.name, running: store.running != nil))
-            .accessibilityLabel([time, company?.name, store.running != nil ? "running" : nil].compactMap { $0 }.joined(separator: ", "))
+        let running = store.runningSessions
+        if running.count > 1 {
+            let text = "\(running.count) timers running"
+            Image(nsImage: MenuBarLabelImage.make(time: text, company: nil, running: true))
+                .accessibilityLabel(text)
+        } else {
+            let company = running.first.flatMap { store.company($0.companyID) } ?? store.selectedCompany
+            let total = company.map { store.actualTotal(for: $0.id, on: store.currentDay(for: $0.id)) } ?? 0
+            let time = TimeFormat.clock(total)
+            Image(nsImage: MenuBarLabelImage.make(time: time, company: company?.name, running: !running.isEmpty))
+                .accessibilityLabel([time, company?.name, running.isEmpty ? nil : "running"].compactMap { $0 }.joined(separator: ", "))
+        }
     }
 }
 
@@ -64,7 +72,8 @@ enum MenuBarLabelImage {
     }
 }
 
-/// Today's time with Start/Stop, the companies to switch between, then the app commands.
+/// The selected company's time today with its own Start/Stop, the companies to switch
+/// between, then the app commands.
 struct MenuBarPanel: View {
     @Environment(TimeStore.self) private var store
     @Environment(\.openWindow) private var openWindow
@@ -73,7 +82,7 @@ struct MenuBarPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let company = store.currentCompany {
+            if let company = store.selectedCompany {
                 header(company)
             } else {
                 Text("No companies yet")
@@ -90,18 +99,20 @@ struct MenuBarPanel: View {
                     .padding(.top, 4)
                     .padding(.bottom, 2)
                 ForEach(store.companies) { company in
-                    MenuRow(action: { store.switchTo(company.id) }) { highlighted in
+                    MenuRow(action: { store.selectedCompanyID = company.id }) { highlighted in
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .semibold))
-                            .opacity(company.id == store.currentCompanyID ? 1 : 0)
+                            .opacity(company.id == store.selectedCompanyID ? 1 : 0)
                             .frame(width: 12)
                         CompanyDot(company: company, size: 8)
                         Text(company.name).lineLimit(1)
                         Spacer()
+                        // Running timers in red, as in the sidebar.
+                        let isRunning = store.running(for: company.id) != nil
                         Text(TimeFormat.clock(store.actualTotal(for: company.id, on: store.currentDay(for: company.id))))
-                            .font(.system(size: 12))
+                            .font(.system(size: 12, weight: isRunning ? .semibold : .regular))
                             .monospacedDigit()
-                            .foregroundStyle(highlighted ? .white.opacity(0.75) : .secondary)
+                            .foregroundStyle(highlighted ? AnyShapeStyle(.white.opacity(0.75)) : isRunning ? AnyShapeStyle(Theme.live) : AnyShapeStyle(.secondary))
                     }
                 }
             }
@@ -125,7 +136,7 @@ struct MenuBarPanel: View {
     }
 
     private func header(_ company: Company) -> some View {
-        let isRunning = store.running != nil
+        let isRunning = store.running(for: company.id) != nil
         let total = store.actualTotal(for: company.id, on: store.currentDay(for: company.id))
 
         return HStack(spacing: 10) {
@@ -142,7 +153,7 @@ struct MenuBarPanel: View {
             }
             Spacer()
             Button {
-                if isRunning { store.stop() } else { store.start(company.id) }
+                if isRunning { store.stop(company.id) } else { store.start(company.id) }
             } label: {
                 Text(isRunning ? "Stop" : "Start")
                     .font(.system(size: 12, weight: .semibold))

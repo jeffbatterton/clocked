@@ -63,39 +63,34 @@ private struct MainHeader: View {
     }
 }
 
-/// "● 1:22:47 Stop" while running, otherwise "Start" for the selected company.
+/// The selected company's own timer: "● 1:22:47 Stop" while it runs, otherwise a fresh
+/// "0:00:00 Start", whatever other companies are running.
 private struct TimerControl: View {
     let company: Company
     @Environment(TimeStore.self) private var store
 
     var body: some View {
-        if let running = store.running {
-            HStack(spacing: 8) {
+        let running = store.running(for: company.id)
+        HStack(spacing: 8) {
+            if running != nil {
                 Circle().fill(Theme.live).frame(width: 7, height: 7)
-                // The running company's name under the time, as in the menu bar item.
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(TimeFormat.stopwatch(store.now.timeIntervalSince(running.start)))
-                        .monospacedDigit()
-                    if let runningCompany = store.company(running.companyID) {
-                        Text(runningCompany.name)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .frame(maxWidth: 140, alignment: .leading)
-                    }
-                }
-                .fixedSize()
-                Button { store.stop() } label: {
+            }
+            Text(TimeFormat.stopwatch(running.map { store.now.timeIntervalSince($0.start) } ?? 0))
+                .monospacedDigit()
+                .foregroundStyle(running == nil ? .tertiary : .primary)
+            if running != nil {
+                Button { store.stop(company.id) } label: {
                     Text("Stop").foregroundStyle(Theme.live)
                 }
                 .controlSize(.small)
+            } else {
+                Button { store.start(company.id) } label: {
+                    Text("Start").foregroundStyle(Theme.start)
+                }
+                .controlSize(.small)
             }
-        } else {
-            Button { store.start(company.id) } label: {
-                Text("Start").foregroundStyle(Theme.start)
-            }
-            .controlSize(.small)
         }
+        .fixedSize()
     }
 }
 

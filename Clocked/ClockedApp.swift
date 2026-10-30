@@ -10,7 +10,7 @@ struct ClockedApp: App {
 
     init() {
         let store = TimeStore(testDrive: Preferences.shared.testDrive)
-        let reminder = Reminder(prefs: .shared, isRunning: { store.running != nil })
+        let reminder = Reminder(prefs: .shared, isRunning: { store.isAnyRunning })
         _store = State(initialValue: store)
         _reminder = State(initialValue: reminder)
         // Not while unit tests run inside the app, so they never use up today's reminder.

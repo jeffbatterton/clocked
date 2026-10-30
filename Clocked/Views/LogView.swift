@@ -90,7 +90,7 @@ private struct MonthGrid: View {
     var body: some View {
         let slots = slots
         let totals = store.dailyTotals(for: company.id)
-        let runningDay = store.running.flatMap { $0.companyID == company.id ? store.startOfDay($0.start) : nil }
+        let runningDay = store.running(for: company.id).map { store.startOfDay($0.start) }
 
         VStack(spacing: 6) {
             HStack(spacing: 6) {
