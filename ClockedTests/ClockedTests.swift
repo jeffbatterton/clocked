@@ -46,9 +46,9 @@ struct StoreTests {
     @Test func weekTotalAddsRoundedDays() {
         let store = makeStore()
         let acme = store.addCompany(name: "Acme", colorIndex: 0)
-        // Mon 27 Oct 7h 38m, Tue 28 Oct 0h 20m.
-        store.editDay(companyID: acme.id, day: date(27, 0), newDay: date(27, 0), seconds: 458 * 60)
-        store.editDay(companyID: acme.id, day: date(28, 0), newDay: date(28, 0), seconds: 20 * 60)
+        // Tue 27 Oct 7h 38m, Wed 28 Oct 0h 20m.
+        store.addEntry(companyID: acme.id, day: date(27, 0), seconds: 458 * 60)
+        store.addEntry(companyID: acme.id, day: date(28, 0), seconds: 20 * 60)
 
         let week = DateInterval(start: date(27, 0), duration: 7 * 86400)
         let rule = RoundingRule(enabled: true, unitMinutes: 60, roundUpAfterMinutes: 15)
@@ -56,19 +56,78 @@ struct StoreTests {
         #expect(store.total(for: acme.id, in: week, rule: .off) == 478 * 60)
     }
 
-    @Test func editingADayMovesAndReplacesItsSessions() {
+    @Test func adjustmentsCountTowardTheDayAndKeepItsSessions() {
         let store = makeStore()
         let acme = store.addCompany(name: "Acme", colorIndex: 0)
-        store.editDay(companyID: acme.id, day: date(28, 0), newDay: date(28, 0), seconds: 3600)
-        store.editDay(companyID: acme.id, day: date(28, 0), newDay: date(27, 0), seconds: 2 * 3600)
+        store.addSession(companyID: acme.id, start: date(29, 9, 2), end: date(29, 10, 47), note: "Auth refactor")
+        store.addAdjustment(companyID: acme.id, day: date(29, 15), seconds: 20 * 60, note: "Forgot the timer")
 
-        let days = store.loggedDays(for: acme.id)
-        #expect(days.count == 1)
-        #expect(days.first?.day == date(27, 0))
-        #expect(days.first?.seconds == TimeInterval(2 * 3600))
+        #expect(store.actualTotal(for: acme.id, on: date(29, 0)) == 125 * 60)
+        #expect(store.dailyTotals(for: acme.id)[date(29, 0)] == TimeInterval(125 * 60))
+        #expect(store.sessions(for: acme.id, on: date(29, 0)).map(\.note) == ["Auth refactor"])
 
-        store.deleteDay(companyID: acme.id, day: date(27, 0))
+        // Taking off more than the day had leaves it at zero, not below.
+        let adjustment = store.adjustments(for: acme.id, on: date(29, 0))[0]
+        store.updateAdjustment(adjustment.id, seconds: -3 * 3600, note: "")
+        #expect(store.actualTotal(for: acme.id, on: date(29, 0)) == 0)
+
+        store.updateAdjustment(adjustment.id, seconds: 0, note: "")
+        #expect(store.adjustments.isEmpty)
+
+        store.deleteDay(companyID: acme.id, day: date(29, 0))
         #expect(store.loggedDays(for: acme.id).isEmpty)
+    }
+
+    @Test func sessionsCantOverlap() {
+        let store = makeStore()
+        let acme = store.addCompany(name: "Acme", colorIndex: 0)
+        let northwind = store.addCompany(name: "Northwind", colorIndex: 1)
+        let morning = store.addSession(companyID: acme.id, start: date(29, 9), end: date(29, 11))
+        let noon = store.addSession(companyID: acme.id, start: date(29, 12), end: date(29, 13))
+
+        #expect(store.problem(withTimes: date(29, 10), date(29, 12, 30), for: acme.id, excluding: noon.id) != nil)
+        #expect(store.problem(withTimes: date(29, 11), date(29, 13), for: acme.id, excluding: noon.id) == nil)
+        #expect(store.problem(withTimes: date(29, 13), date(29, 12), for: acme.id, excluding: noon.id) != nil)
+        // Another company's time can run alongside.
+        #expect(store.problem(withTimes: date(29, 9), date(29, 11), for: northwind.id, excluding: nil) == nil)
+
+        store.setTimes(for: morning.id, start: date(29, 8, 30), end: date(29, 10))
+        #expect(store.session(morning.id)?.start == date(29, 8, 30))
+        #expect(store.actualTotal(for: acme.id, on: date(29, 0)) == 150 * 60)
+    }
+
+    @Test func notesAreTrimmedAndSaved() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("data.json")
+        let store = TimeStore(fileURL: url, ticking: false)
+        let acme = store.addCompany(name: "Acme", colorIndex: 0)
+        store.start(acme.id)
+        let running = store.running(for: acme.id)!
+        store.setNote("  Billing webhooks \n", for: running.id)
+
+        let reloaded = TimeStore(fileURL: url, ticking: false)
+        #expect(reloaded.running(for: acme.id)?.note == "Billing webhooks")
+        #expect(reloaded.running(for: acme.id)?.source == .timer)
+    }
+
+    @Test func filesFromBeforeNotesStillLoad() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("data.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let company = UUID()
+        let old = """
+        {"companies":[{"id":"\(company)","name":"Acme","colorIndex":0}],
+         "sessions":[{"id":"\(UUID())","companyID":"\(company)","start":"2026-10-29T13:00:00Z","end":"2026-10-29T14:00:00Z"}]}
+        """
+        try Data(old.utf8).write(to: url)
+
+        let store = TimeStore(fileURL: url, ticking: false)
+        #expect(store.sessions.count == 1)
+        #expect(store.sessions[0].note == "")
+        #expect(store.sessions[0].source == .timer)
+        #expect(store.adjustments.isEmpty)
     }
 
     @Test func eachCompanyHasItsOwnTimer() {
@@ -92,11 +151,13 @@ struct StoreTests {
         let store = makeStore()
         let acme = store.addCompany(name: "Acme", colorIndex: 0)
         let northwind = store.addCompany(name: "Northwind", colorIndex: 1)
-        store.editDay(companyID: acme.id, day: date(28, 0), newDay: date(28, 0), seconds: 3600)
+        store.addEntry(companyID: acme.id, day: date(28, 0), seconds: 3600)
+        store.addAdjustment(companyID: acme.id, day: date(28, 0), seconds: 600)
         store.removeCompany(acme.id)
 
         #expect(store.companies.map(\.id) == [northwind.id])
         #expect(store.sessions.isEmpty)
+        #expect(store.adjustments.isEmpty)
     }
 
     @Test func savesAndReloads() {
@@ -130,6 +191,7 @@ struct TestDriveTests {
         #expect(sample.sessions.filter(\.isRunning).count == 1)
         #expect(sample.sessions.allSatisfy { $0.start <= now && ($0.end ?? now) <= now })
         #expect(sample.sessions.count > 60)
+        #expect(sample.sessions.contains { !$0.note.isEmpty })
     }
 
     @Test func testDriveSetsYourDataAsideAndBringsItBack() {
@@ -178,6 +240,7 @@ struct AddEntryTests {
         #expect(store.actualTotal(for: acme.id, on: day) == 5400)
         let starts = store.sessions.map(\.start)
         #expect(starts == [day.addingTimeInterval(9 * 3600), day.addingTimeInterval(10 * 3600)])
+        #expect(store.sessions.allSatisfy { $0.source == .manual })
 
         store.addEntry(companyID: acme.id, day: day, seconds: 0)
         #expect(store.sessions.count == 2)
@@ -201,6 +264,29 @@ struct RollAheadTests {
         let this = calendar.dateInterval(of: .month, for: Date())!
         #expect(store.total(for: acme.id, in: next, rule: .off) == 3 * 3600)
         #expect(store.total(for: acme.id, in: this, rule: .off) == 0)
+    }
+}
+
+@MainActor
+struct TimelineTests {
+    @Test func gapsAreTheUntrackedTimeBetweenSessions() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("data.json")
+        let store = TimeStore(fileURL: url, ticking: false)
+        let acme = store.addCompany(name: "Acme", colorIndex: 0)
+        let today = store.startOfDay(Date())
+        func at(_ minutes: Int) -> Date { today.addingTimeInterval(TimeInterval(minutes * 60)) }
+        store.addSession(companyID: acme.id, start: at(9 * 60), end: at(10 * 60))
+        // 3 minutes later: too short to count as a gap.
+        store.addSession(companyID: acme.id, start: at(10 * 60 + 3), end: at(11 * 60))
+        store.addSession(companyID: acme.id, start: at(11 * 60 + 51), end: at(12 * 60 + 47))
+
+        let defaults = UserDefaults(suiteName: "ClockedTests-\(UUID().uuidString)")!
+        let model = TimelineModel(store: store, prefs: Preferences(defaults: defaults), companyID: acme.id)
+        #expect(model.gaps.map(\.start) == [at(11 * 60)])
+        #expect(model.gaps.map(\.end) == [at(11 * 60 + 51)])
+        #expect(model.climb.last?.y == CGFloat(2 * 3600 - 3 * 60 + 56 * 60))
     }
 }
 

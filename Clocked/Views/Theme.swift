@@ -32,7 +32,6 @@ enum Theme {
     static let rowLine = Color.dynamic(light: 0xf0f0f3, dark: 0x2a2a2d)
     static let live = Color.dynamic(light: 0xe5484d, dark: 0xff5a5f)
     static let start = Color.dynamic(light: 0x30a46c, dark: 0x3dbd7d)
-    static let accent = Color.dynamic(light: 0x5b5bd6, dark: 0x6e6ef0)
 }
 
 /// Company colours. Each is brightened a little for dark mode.

@@ -72,8 +72,8 @@ enum MenuBarLabelImage {
     }
 }
 
-/// The selected company's time today with its own Start/Stop, the companies to switch
-/// between, then the app commands.
+/// The selected company's time today with its own Start/Stop and, while it runs, the note
+/// for what you're working on; the companies to switch between, then the app commands.
 struct MenuBarPanel: View {
     @Environment(TimeStore.self) private var store
     @Environment(\.openWindow) private var openWindow
@@ -84,6 +84,11 @@ struct MenuBarPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             if let company = store.selectedCompany {
                 header(company)
+                if let running = store.running(for: company.id) {
+                    RunningNoteField(session: running)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 10)
+                }
             } else {
                 Text("No companies yet")
                     .foregroundStyle(.secondary)
@@ -199,10 +204,30 @@ private struct MenuRow<Content: View>: View {
                 .foregroundStyle(hovering ? .white : .primary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(hovering ? Theme.accent : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .background(hovering ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// The running session's note. Saves on ⏎ and as you leave the field.
+private struct RunningNoteField: View {
+    let session: Session
+    @Environment(TimeStore.self) private var store
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Note", text: $draft, prompt: Text("What are you working on?"))
+            .textFieldStyle(.roundedBorder)
+            .focused($focused)
+            .onSubmit { store.setNote(draft, for: session.id) }
+            .onAppear { draft = session.note }
+            .onChange(of: session.id) { draft = session.note }
+            .onChange(of: session.note) { _, note in if !focused { draft = note } }
+            .onChange(of: focused) { _, now in if !now { store.setNote(draft, for: session.id) } }
+            .onDisappear { store.setNote(draft, for: session.id) }
     }
 }

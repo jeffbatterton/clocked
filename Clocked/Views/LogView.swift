@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The selected company's month as a calendar. Each day shows its rounded time and is shaded
-/// deeper the longer you worked. Click a day to edit it (or add time to an empty one); the
-/// + button adds time to any day without running the timer, including future days, so time
-/// over a monthly cap can be rolled ahead.
+/// The selected company's month as a calendar. Each day shows its rounded (billed) time and a
+/// pill for each session; hovering shows its actual time, and clicking opens the day to add or
+/// edit time. Future days open too, so time over a monthly cap can be rolled ahead.
 struct LogView: View {
     let company: Company
     @Environment(TimeStore.self) private var store
@@ -11,12 +10,10 @@ struct LogView: View {
 
     @State private var month = Date()
     @State private var editingDay: Date?
-    @State private var adding = false
 
     var body: some View {
         let calendar = prefs.calendar
         let monthInterval = calendar.dateInterval(of: .month, for: month) ?? DateInterval(start: month, duration: 0)
-        let isCurrentMonth = calendar.isDate(month, equalTo: store.now, toGranularity: .month)
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -31,14 +28,6 @@ struct LogView: View {
                 Text(TimeFormat.duration(store.total(for: company.id, in: monthInterval, rule: prefs.rule)))
                     .font(.system(size: 20, weight: .semibold))
                     .monospacedDigit()
-                Button { adding = true } label: { Image(systemName: "plus") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
-                    .help("Add time without running the timer")
-                    .padding(.leading, 6)
-                    .popover(isPresented: $adding, arrowEdge: .bottom) {
-                        EntryEditor(company: company, mode: .add(isCurrentMonth ? store.now : monthInterval.start)) { adding = false }
-                    }
             }
             .controlSize(.small)
 
@@ -90,7 +79,10 @@ private struct MonthGrid: View {
     var body: some View {
         let slots = slots
         let totals = store.dailyTotals(for: company.id)
-        let runningDay = store.running(for: company.id).map { store.startOfDay($0.start) }
+        // Each day's sessions, gathered once for the whole month.
+        let sessionsByDay = Dictionary(grouping: store.sessions.filter { $0.companyID == company.id }) {
+            store.startOfDay($0.start)
+        }
 
         VStack(spacing: 6) {
             HStack(spacing: 6) {
@@ -111,7 +103,7 @@ private struct MonthGrid: View {
                                 company: company,
                                 day: key,
                                 seconds: totals[key] ?? 0,
-                                isRunning: key == runningDay,
+                                sessions: (sessionsByDay[key] ?? []).sorted { $0.start < $1.start },
                                 editingDay: $editingDay
                             )
                         } else {
@@ -124,53 +116,69 @@ private struct MonthGrid: View {
     }
 }
 
+/// A day: its number, its billed time and a pill per session. Hovering tints it and shows the
+/// actual time; clicking opens it.
 private struct DayCell: View {
     let company: Company
     let day: Date
     let seconds: TimeInterval
-    let isRunning: Bool
+    let sessions: [Session]
     @Binding var editingDay: Date?
 
     @Environment(TimeStore.self) private var store
     @Environment(Preferences.self) private var prefs
+    @State private var hovering = false
 
     var body: some View {
+        let color = Palette.color(company.colorIndex)
         let today = store.startOfDay(store.now)
         let isFuture = day > today
         let isToday = day == today
-        let rounded = prefs.rule.apply(seconds)
         let isEditing = editingDay == day
-        // Deeper colour for longer days, topping out at 8 hours.
-        let shade = seconds > 0 ? 0.08 + 0.32 * min(1, rounded / (8 * 3600)) : 0
+        let showsActual = hovering && seconds > 0
 
         Button { editingDay = day } label: {
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text("\(Calendar.current.component(.day, from: day))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 if seconds > 0 {
-                    Text(TimeFormat.duration(rounded))
-                        .font(.system(size: 15, weight: .semibold))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(showsActual ? TimeFormat.clock(seconds) : TimeFormat.duration(prefs.rule.apply(seconds)))
+                            .font(.system(size: 15, weight: .semibold))
+                            .monospacedDigit()
+                        if showsActual {
+                            Text("actual")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                }
+                if !sessions.isEmpty {
+                    SessionPills(sessions: sessions, color: color)
+                        .padding(.top, 6)
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .frame(minHeight: 44)
             .background {
-                // The tint sits on the panel colour, so it reads the same in light and dark.
+                // The wash sits on the panel colour, so it reads the same in light and dark.
                 ZStack {
                     RoundedRectangle(cornerRadius: 8).fill(Theme.panel)
-                    RoundedRectangle(cornerRadius: 8).fill(Palette.color(company.colorIndex).opacity(shade))
+                    if hovering { RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.07)) }
                 }
             }
             .overlay {
                 if isEditing {
-                    RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.accent, lineWidth: 2)
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(color, lineWidth: 2)
+                } else if hovering {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(color.opacity(0.35), lineWidth: 1.5)
                 } else if isToday {
                     RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.live, lineWidth: 2)
                 }
@@ -178,129 +186,302 @@ private struct DayCell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
         // Future days stay clickable so time can be rolled ahead; empty ones are faded.
         .opacity(isFuture && seconds == 0 ? 0.6 : 1)
-        .help(seconds > 0 ? "\(TimeFormat.rowDay(day)) · \(TimeFormat.duration(rounded))" : TimeFormat.rowDay(day))
         .popover(
             isPresented: Binding(get: { editingDay == day }, set: { if !$0 { editingDay = nil } }),
             arrowEdge: .trailing
         ) {
-            EntryEditor(
-                company: company,
-                mode: seconds > 0 ? .edit(LoggedDay(day: day, seconds: seconds, isRunning: isRunning)) : .add(day)
-            ) { editingDay = nil }
+            DayPopover(company: company, day: day)
         }
     }
 }
 
-/// Add time to a day, or edit a day's date and time (or delete it).
-struct EntryEditor: View {
-    enum Mode {
-        case add(Date)
-        case edit(LoggedDay)
-    }
+/// A pill per session in the order they happened, each as wide as the session was long. The
+/// cell's full width is a 9-hour day. Sessions under 45 minutes are lighter.
+private struct SessionPills: View {
+    let sessions: [Session]
+    let color: Color
+    @Environment(TimeStore.self) private var store
 
+    private let fullDay: TimeInterval = 9 * 3600
+    private let gap: CGFloat = 2
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: gap) {
+                ForEach(sessions) { session in
+                    let length = session.duration(now: store.now)
+                    Capsule()
+                        .fill(color.opacity(length < 45 * 60 ? 0.55 : 1))
+                        .frame(width: max(4, geo.size.width * min(1, length / fullDay) - gap))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: 10)
+        .clipped()
+    }
+}
+
+/// A day opened from the log: its sessions on a small timeline, edited the way they are on
+/// Today, its adjustments underneath, and its actual time. The billed time stays on the cell.
+struct DayPopover: View {
     let company: Company
-    let mode: Mode
-    var onDone: () -> Void
+    let day: Date
 
     @Environment(TimeStore.self) private var store
-    @State private var date: Date
-    @State private var hours: Int
-    @State private var minutes: Int
+    @Environment(Preferences.self) private var prefs
+    @State private var openSession: UUID?
+    @State private var editingAdjustment: UUID?
+    @State private var addingAdjustment = false
 
-    init(company: Company, mode: Mode, onDone: @escaping () -> Void) {
-        self.company = company
-        self.mode = mode
-        self.onDone = onDone
-        switch mode {
-        case .add(let day):
-            _date = State(initialValue: day)
-            _hours = State(initialValue: 1)
-            _minutes = State(initialValue: 0)
-        case .edit(let entry):
-            let total = Int(entry.seconds / 60)
-            _date = State(initialValue: entry.day)
-            _hours = State(initialValue: total / 60)
-            _minutes = State(initialValue: total % 60)
+    private let width: CGFloat = 400
+    private let hourHeight: CGFloat = 46
+    private let tallest: CGFloat = 440
+
+    var body: some View {
+        let model = TimelineModel(store: store, prefs: prefs, companyID: company.id, day: day, trimmed: true)
+        let adjustments = store.adjustments(for: company.id, on: day)
+        let color = Palette.color(company.colorIndex)
+
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(TimeFormat.clock(model.total))
+                    .font(.system(size: 17, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 10)
+
+            if model.blocks.isEmpty {
+                Text("No sessions on this day.")
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 6)
+            } else {
+                let height = CGFloat(max(1, model.hours.count - 1)) * hourHeight
+                ScrollView(.vertical) {
+                    TimelineTrack(
+                        model: model,
+                        company: company,
+                        size: CGSize(width: width - 28, height: height),
+                        openSession: $openSession,
+                        inlineTimes: true
+                    )
+                }
+                .frame(height: min(height, tallest))
+                .scrollDisabled(height <= tallest)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(adjustments) { adjustment in
+                    if editingAdjustment == adjustment.id {
+                        AdjustmentRowEditor(company: company, day: day, adjustment: adjustment) { editingAdjustment = nil }
+                    } else {
+                        AdjustmentChip(adjustment: adjustment, color: color)
+                            .onTapGesture { editingAdjustment = adjustment.id }
+                    }
+                }
+                if addingAdjustment {
+                    AdjustmentRowEditor(company: company, day: day, adjustment: nil) { addingAdjustment = false }
+                }
+            }
+            .padding(.leading, model.blocks.isEmpty ? 0 : 56)
+            .padding(.top, adjustments.isEmpty && !addingAdjustment ? 0 : 10)
+
+            Divider().padding(.top, 12).padding(.bottom, 10)
+
+            HStack(spacing: 16) {
+                Button("+ Add session", action: addSession)
+                Button("± Adjust") { addingAdjustment = true }
+                Spacer()
+                if !model.blocks.isEmpty || !adjustments.isEmpty {
+                    Button("Delete day") { store.deleteDay(companyID: company.id, day: day) }
+                        .foregroundStyle(Theme.live)
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(color)
+            .padding(.horizontal, 4)
         }
+        .padding(14)
+        .frame(width: width)
     }
 
-    private var editing: LoggedDay? {
-        if case .edit(let entry) = mode { return entry }
-        return nil
+    /// Adds an hour after the day's last session (before its first, if that's taken) and opens
+    /// its times.
+    private func addSession() {
+        var start = store.nextFreeStart(companyID: company.id, day: day)
+        if store.problem(withTimes: start, start.addingTimeInterval(3600), for: company.id, excluding: nil) != nil,
+           let first = store.sessions(for: company.id, on: day).first {
+            start = first.start.addingTimeInterval(-3600)
+        }
+        guard store.problem(withTimes: start, start.addingTimeInterval(3600), for: company.id, excluding: nil) == nil else { return }
+        let session = store.addSession(companyID: company.id, start: start, end: start.addingTimeInterval(3600))
+        // Its block appears on the next update.
+        DispatchQueue.main.async { openSession = session.id }
+    }
+}
+
+/// An adjustment under the day's timeline: its time and why, in a dashed outline.
+private struct AdjustmentChip: View {
+    let adjustment: Adjustment
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(TimeFormat.signedClock(adjustment.seconds))
+                .fontWeight(.semibold)
+                .monospacedDigit()
+            Text(adjustment.note.isEmpty ? "Adjustment" : adjustment.note)
+                .foregroundStyle(adjustment.note.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(color.opacity(0.5), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+        )
+        .contentShape(Rectangle())
+        .help("Click to edit")
+    }
+}
+
+/// The coloured bar at the start of a row: solid for a session, dashed for an adjustment.
+private struct RowBar: View {
+    let color: Color
+    var dashed = false
+
+    var body: some View {
+        if dashed {
+            GeometryReader { geo in
+                Path { path in
+                    path.move(to: CGPoint(x: 2, y: 0))
+                    path.addLine(to: CGPoint(x: 2, y: geo.size.height))
+                }
+                .stroke(color, style: StrokeStyle(lineWidth: 4, dash: [3, 3]))
+            }
+            .frame(width: 4)
+        } else {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 4)
+        }
+    }
+}
+
+/// Saves on ⏎ and when it goes away (another row opened, or the popover closed); esc cancels.
+struct SaveKeys: View {
+    var save: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Button("Save", action: save).keyboardShortcut(.defaultAction)
+            Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Time added to or taken off the day, with a note saying why.
+private struct AdjustmentRowEditor: View {
+    let company: Company
+    let day: Date
+    let adjustment: Adjustment?
+    var onClose: () -> Void
+
+    @Environment(TimeStore.self) private var store
+    @State private var adds = true
+    @State private var hours = 0
+    @State private var minutes = 0
+    @State private var note = ""
+    @State private var finished = false
+    @FocusState private var minutesFocused: Bool
+
+    private var seconds: TimeInterval {
+        let total = TimeInterval(min(max(hours, 0), 24) * 3600 + min(max(minutes, 0), 59) * 60)
+        return adds ? total : -total
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("\(editing == nil ? "Add time" : "Edit entry") · \(company.name)")
-                .font(.system(size: 13, weight: .semibold))
-
-            if editing?.isRunning == true {
-                Text("Stop the timer to edit this day.")
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 10) {
+            RowBar(color: Palette.color(company.colorIndex), dashed: true)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 5) {
+                    Picker("Add or take off", selection: $adds) {
+                        Text("+").tag(true)
+                        Text("−").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    TextField("Hours", value: $hours, format: .number)
+                        .frame(width: 36)
+                        .multilineTextAlignment(.trailing)
+                        .padding(.leading, 6)
+                    Text("h").foregroundStyle(.secondary)
+                    TextField("Minutes", value: $minutes, format: .number)
+                        .frame(width: 36)
+                        .multilineTextAlignment(.trailing)
+                        .focused($minutesFocused)
+                        .padding(.leading, 4)
+                    Text("m").foregroundStyle(.secondary)
+                }
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                TextField("Note", text: $note, prompt: Text("Why? e.g. Forgot to start the timer"))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(save)
                 HStack {
+                    Button(adjustment == nil ? "Remove" : "Delete adjustment") {
+                        finished = true
+                        if let adjustment { store.deleteAdjustment(adjustment.id) }
+                        onClose()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.live)
                     Spacer()
-                    Button("OK", action: onDone).keyboardShortcut(.defaultAction)
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Text("Date").foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-                        DatePicker("Date", selection: $date, displayedComponents: .date)
-                            .labelsHidden()
-                            .datePickerStyle(.field)
-                    }
-                    HStack(spacing: 10) {
-                        Text("Time").foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-                        HStack(spacing: 5) {
-                            TextField("Hours", value: $hours, format: .number)
-                                .frame(width: 44)
-                                .multilineTextAlignment(.trailing)
-                            Text("h").foregroundStyle(.secondary).fixedSize()
-                            TextField("Minutes", value: $minutes, format: .number)
-                                .frame(width: 44)
-                                .multilineTextAlignment(.trailing)
-                                .padding(.leading, 6)
-                            Text("m").foregroundStyle(.secondary).fixedSize()
-                        }
-                        .textFieldStyle(.roundedBorder)
-                        .labelsHidden()
-                    }
-                }
-                HStack(spacing: 8) {
-                    if let editing {
-                        Button("Delete", role: .destructive) {
-                            store.deleteDay(companyID: company.id, day: editing.day)
-                            onDone()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.live)
-                    }
-                    Spacer()
-                    Button("Cancel", action: onDone).keyboardShortcut(.cancelAction)
-                    Button(editing == nil ? "Add" : "Save", action: save)
-                        .keyboardShortcut(.defaultAction)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(seconds == 0 && editing == nil)
-                }
-                .padding(.top, 2)
+                .font(.system(size: 12))
             }
         }
-        .padding(16)
-        .frame(width: 280)
-    }
-
-    private var seconds: TimeInterval {
-        TimeInterval(min(max(hours, 0), 24) * 3600 + min(max(minutes, 0), 59) * 60)
+        .padding(10)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 2)
+        .background(SaveKeys(save: save, cancel: { finished = true; onClose() }))
+        .onAppear {
+            if let adjustment {
+                adds = adjustment.seconds >= 0
+                let total = Int(abs(adjustment.seconds) / 60)
+                hours = total / 60
+                minutes = total % 60
+                note = adjustment.note
+            }
+            minutesFocused = true
+        }
+        .onDisappear { if !finished { commit() } }
     }
 
     private func save() {
-        if let editing {
-            store.editDay(companyID: company.id, day: editing.day, newDay: date, seconds: seconds)
+        commit()
+        onClose()
+    }
+
+    private func commit() {
+        finished = true
+        if let adjustment {
+            store.updateAdjustment(adjustment.id, seconds: seconds, note: note)
         } else {
-            store.addEntry(companyID: company.id, day: date, seconds: seconds)
+            store.addAdjustment(companyID: company.id, day: day, seconds: seconds, note: note)
         }
-        onDone()
     }
 }

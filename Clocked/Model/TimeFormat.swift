@@ -29,6 +29,30 @@ enum TimeFormat {
         return "\(h % 12 == 0 ? 12 : h % 12)\(suffix)"
     }
 
+    /// Vertical timeline label: "8 AM", "Noon", "Midnight". Hours past 24 wrap into the next day.
+    static func hourName(_ hour: Int) -> String {
+        let h = hour % 24
+        if h == 0 { return "Midnight" }
+        if h == 12 { return "Noon" }
+        return "\(h % 12) \(h < 12 ? amSymbol : pmSymbol)"
+    }
+
+    /// "9:05 AM".
+    static func time(_ date: Date) -> String { timeFormatter.string(from: date) }
+
+    /// "9:05 – 10:59 AM", "11:50 AM – 12:47 PM", or "1:15 PM – now" while running.
+    static func range(_ start: Date, _ end: Date?) -> String {
+        guard let end else { return "\(time(start)) – now" }
+        let isMorning = { (date: Date) in Calendar.current.component(.hour, from: date) < 12 }
+        let sameHalf = isMorning(start) == isMorning(end)
+        return sameHalf ? "\(shortTime(start)) – \(time(end))" : "\(time(start)) – \(time(end))"
+    }
+
+    /// "+0:20", "−1:05": an adjustment to a day.
+    static func signedClock(_ seconds: TimeInterval) -> String {
+        (seconds < 0 ? "−" : "+") + clock(abs(seconds))
+    }
+
     /// "8:00 AM", or "Midnight" for 24.
     static func hourOfDay(_ hour: Int) -> String {
         if hour == 24 { return "Midnight" }
@@ -59,6 +83,13 @@ enum TimeFormat {
         f.dateFormat = "h:mm"
         return f
     }()
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+    private static var amSymbol: String { timeFormatter.amSymbol }
+    private static var pmSymbol: String { timeFormatter.pmSymbol }
     private static let rowDayFormatter = formatter("EEE MMM d")
     private static let longDayFormatter = formatter("EEEE MMMM d")
     private static let monthFormatter = formatter("MMMM yyyy")

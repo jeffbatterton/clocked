@@ -17,10 +17,16 @@ enum SampleData {
         let freelance = Company(name: "Freelance", colorIndex: 3)
         let today = calendar.startOfDay(for: now)
         var sessions: [Session] = []
+        // Notes come from their own generator, so the times stay the same as before notes.
+        var noteRNG = SplitMix64(seed: 711)
 
         func add(_ company: Company, _ day: Date, at minute: Int, for length: Int) {
             guard let start = calendar.date(byAdding: .minute, value: minute, to: day) else { return }
-            sessions.append(Session(companyID: company.id, start: start, end: start.addingTimeInterval(TimeInterval(length * 60))))
+            let choices = notes[company.name] ?? []
+            // About one session in six has no note.
+            let note = choices.isEmpty || Int.random(in: 0..<6, using: &noteRNG) == 0
+                ? "" : choices[Int.random(in: 0..<choices.count, using: &noteRNG)]
+            sessions.append(Session(companyID: company.id, start: start, end: start.addingTimeInterval(TimeInterval(length * 60)), note: note))
         }
 
         for daysBack in 1...75 {
@@ -51,11 +57,38 @@ enum SampleData {
             add(company, today, at: start, for: length)
         }
         sessions.sort { $0.start < $1.start }
-        sessions.append(Session(companyID: acme.id, start: runningStart))
+        sessions.append(Session(companyID: acme.id, start: runningStart, note: "Migrating billing webhooks to v2"))
 
         return Contents(companies: [acme, northwind, bluebird, freelance], sessions: sessions, selectedCompanyID: acme.id)
     }
 }
+
+private let notes: [String: [String]] = [
+    "Acme Studio": [
+        "Sprint planning, estimates for the reporting work",
+        "Auth refactor: token refresh and retry",
+        "Client call re: Q1 scope",
+        "Reviewed PR #214, left notes on caching",
+        "Dashboard charts: empty and loading states",
+        "Fixed timezone bug in invoice exports",
+        "Pairing with Sam on the import pipeline",
+        "Wrote migration for the new billing tables",
+    ],
+    "Northwind": [
+        "Weekly sync and roadmap review",
+        "Shipping rates API integration",
+        "Bug triage",
+        "Onboarding flow copy and layout",
+    ],
+    "Bluebird Labs": [
+        "Prototype for the scheduling screen",
+        "Design review with the founders",
+    ],
+    "Freelance": [
+        "Portfolio site updates",
+        "Logo revisions for the bakery",
+    ],
+]
 
 /// Small seeded random number generator.
 struct SplitMix64: RandomNumberGenerator {

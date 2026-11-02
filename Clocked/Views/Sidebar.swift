@@ -28,10 +28,10 @@ struct Sidebar: View {
             if store.isTestDrive {
                 Label("Test drive · sample data", systemImage: "steeringwheel")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Theme.accent.opacity(0.12), in: Capsule())
+                    .background(.quaternary.opacity(0.6), in: Capsule())
                     .padding(.horizontal, 14)
                     .help("Turn off Test drive in Preferences to get your own data back.")
             }
