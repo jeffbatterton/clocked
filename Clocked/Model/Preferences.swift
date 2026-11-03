@@ -51,6 +51,14 @@ final class Preferences {
     var showMenuBarItem: Bool {
         didSet { defaults.set(showMenuBarItem, forKey: Key.showMenuBarItem) }
     }
+    /// When off, Claude can read your time but not add or change it.
+    var claudeCanWrite: Bool {
+        didSet { defaults.set(claudeCanWrite, forKey: Key.claudeCanWrite) }
+    }
+    /// A notice with Undo, in the window or as a notification, when Claude changes something.
+    var showClaudeChanges: Bool {
+        didSet { defaults.set(showClaudeChanges, forKey: Key.showClaudeChanges) }
+    }
     /// Shows sample data in place of your own. The store does the swapping.
     var testDrive: Bool {
         didSet { defaults.set(testDrive, forKey: Key.testDrive) }
@@ -71,6 +79,8 @@ final class Preferences {
         showMenuBarItem = defaults.object(forKey: Key.showMenuBarItem) as? Bool ?? true
         reminderEnabled = defaults.object(forKey: Key.reminderEnabled) as? Bool ?? true
         reminderMinutes = defaults.object(forKey: Key.reminderMinutes) as? Int ?? 5
+        claudeCanWrite = defaults.object(forKey: Key.claudeCanWrite) as? Bool ?? true
+        showClaudeChanges = defaults.object(forKey: Key.showClaudeChanges) as? Bool ?? true
     }
 
     var rule: RoundingRule {
@@ -113,5 +123,7 @@ final class Preferences {
         static let showMenuBarItem = "showMenuBarItem"
         static let reminderEnabled = "reminderEnabled"
         static let reminderMinutes = "reminderMinutes"
+        static let claudeCanWrite = "claudeCanWrite"
+        static let showClaudeChanges = "showClaudeChanges"
     }
 }

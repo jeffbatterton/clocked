@@ -6,6 +6,7 @@ enum MainMode: String {
 
 struct MainWindow: View {
     @Environment(TimeStore.self) private var store
+    @Environment(ClaudeActivity.self) private var activity
     @AppStorage("mainMode") private var mode: MainMode = .today
 
     var body: some View {
@@ -28,8 +29,33 @@ struct MainWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.window)
+            .overlay(alignment: .bottom) {
+                if let notice = activity.notice {
+                    ClaudeNotice(change: notice)
+                        .padding(.bottom, 34)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(duration: 0.35), value: activity.notice?.id)
         }
         .ignoresSafeArea()
+        .opensMainWindow()
+        .onAppear { activity.windowIsOpen = true }
+        .onDisappear { activity.windowIsOpen = false }
+    }
+}
+
+extension View {
+    /// Lets Clocked open its main window from outside SwiftUI, such as from a notification.
+    func opensMainWindow() -> some View { modifier(MainWindowOpener()) }
+}
+
+private struct MainWindowOpener: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+    @Environment(ClaudeActivity.self) private var activity
+
+    func body(content: Content) -> some View {
+        content.onAppear { activity.openMainWindow = { openWindow(id: "main") } }
     }
 }
 

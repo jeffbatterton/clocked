@@ -5,7 +5,7 @@ import UserNotifications
 /// waits the minutes set in Preferences and, if no timer is running by then, posts a
 /// "No timer running" notification. At most once a day.
 @MainActor
-final class Reminder: NSObject, UNUserNotificationCenterDelegate {
+final class Reminder: NSObject {
     static let lastDayKey = "reminderLastDay"
 
     var calendar = Calendar.current
@@ -35,7 +35,6 @@ final class Reminder: NSObject, UNUserNotificationCenterDelegate {
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(woke), name: Notification.Name("com.apple.screenIsUnlocked"), object: nil
         )
-        UNUserNotificationCenter.current().delegate = self
         if prefs.reminderEnabled { Self.requestPermission() }
         woke()
     }
@@ -78,14 +77,5 @@ final class Reminder: NSObject, UNUserNotificationCenterDelegate {
         content.body = "Clocked isn't tracking any time yet today."
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "no-timer-running", content: content, trigger: nil))
-    }
-
-    /// Shows the banner even when Clocked is the frontmost app.
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        completionHandler([.banner, .sound])
     }
 }

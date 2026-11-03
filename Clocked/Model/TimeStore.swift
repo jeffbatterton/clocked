@@ -95,19 +95,26 @@ final class TimeStore {
 
     // MARK: Timer
 
-    /// Starts the company's timer, leaving any other company's timer running.
-    func start(_ companyID: UUID) {
-        guard running(for: companyID) == nil else { return }
-        sessions.append(Session(companyID: companyID, start: Date()))
+    /// Starts the company's timer, leaving any other company's timer running. Returns the new
+    /// session, or nil if the company's timer was already running.
+    @discardableResult
+    func start(_ companyID: UUID, source: Session.Source = .timer) -> Session? {
+        guard running(for: companyID) == nil else { return nil }
+        let session = Session(companyID: companyID, start: Date(), source: source)
+        sessions.append(session)
         now = Date()
         save()
+        return session
     }
 
-    func stop(_ companyID: UUID) {
-        guard let i = sessions.lastIndex(where: { $0.isRunning && $0.companyID == companyID }) else { return }
+    /// Stops the company's timer and returns the session it finished.
+    @discardableResult
+    func stop(_ companyID: UUID) -> Session? {
+        guard let i = sessions.lastIndex(where: { $0.isRunning && $0.companyID == companyID }) else { return nil }
         sessions[i].end = Date()
         now = Date()
         save()
+        return sessions[i]
     }
 
     // MARK: Companies
@@ -230,10 +237,10 @@ final class TimeStore {
     /// Adds finished time without running the timer. It goes after the day's last session,
     /// or at 9:00 on an empty day.
     @discardableResult
-    func addEntry(companyID: UUID, day: Date, seconds: TimeInterval, note: String = "") -> Session? {
+    func addEntry(companyID: UUID, day: Date, seconds: TimeInterval, note: String = "", source: Session.Source = .manual) -> Session? {
         guard seconds > 0 else { return nil }
         let start = nextFreeStart(companyID: companyID, day: day)
-        return addSession(companyID: companyID, start: start, end: start.addingTimeInterval(seconds), note: note)
+        return addSession(companyID: companyID, start: start, end: start.addingTimeInterval(seconds), note: note, source: source)
     }
 
     /// Where time added to a day by hand goes: after the day's last session, or at 9:00.
@@ -286,6 +293,18 @@ final class TimeStore {
         return "That overlaps \(range)."
     }
 
+    /// Puts a session back as it was, adding it again if it was deleted. Used by undo.
+    func restore(_ session: Session) {
+        if let i = sessions.firstIndex(where: { $0.id == session.id }) {
+            sessions[i] = session
+        } else {
+            sessions.append(session)
+        }
+        sessions.sort { $0.start < $1.start }
+        now = Date()
+        save()
+    }
+
     func deleteSession(_ id: UUID) {
         sessions.removeAll { $0.id == id }
         now = Date()
@@ -311,6 +330,18 @@ final class TimeStore {
         } else {
             adjustments[i].seconds = seconds
             adjustments[i].note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        save()
+    }
+
+    func adjustment(_ id: UUID) -> Adjustment? { adjustments.first { $0.id == id } }
+
+    /// Puts an adjustment back as it was. Used by undo.
+    func restore(_ adjustment: Adjustment) {
+        if let i = adjustments.firstIndex(where: { $0.id == adjustment.id }) {
+            adjustments[i] = adjustment
+        } else {
+            adjustments.append(adjustment)
         }
         save()
     }

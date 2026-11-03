@@ -332,3 +332,121 @@ struct ReminderTests {
         #expect(posted() == 0)
     }
 }
+
+@MainActor
+struct ClaudeToolTests {
+    private let store: TimeStore
+    private let prefs: Preferences
+    private let activity: ClaudeActivity
+    private let server: MCPServer
+    private let acme: Company
+
+    init() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("data.json")
+        store = TimeStore(fileURL: url, ticking: false)
+        let defaults = UserDefaults(suiteName: "ClockedTests-\(UUID().uuidString)")!
+        prefs = Preferences(defaults: defaults)
+        activity = ClaudeActivity(store: store, prefs: prefs, defaults: defaults)
+        activity.notify = { _, _ in }
+        server = MCPServer(tools: ClaudeTools(store: store, prefs: prefs, activity: activity))
+        acme = store.addCompany(name: "Acme Co", colorIndex: 0)
+        store.addCompany(name: "Northwind", colorIndex: 1)
+    }
+
+    private func send(_ message: [String: Any]) -> [String: Any] {
+        let data = try! JSONSerialization.data(withJSONObject: message)
+        let reply = server.handle(String(decoding: data, as: UTF8.self)) ?? "{}"
+        return try! JSONSerialization.jsonObject(with: Data(reply.utf8)) as! [String: Any]
+    }
+
+    /// Calls a tool and returns its text and whether it failed.
+    private func call(_ name: String, _ arguments: [String: Any] = [:]) -> (text: String, isError: Bool) {
+        let reply = send(["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": name, "arguments": arguments]])
+        let result = reply["result"] as! [String: Any]
+        let content = (result["content"] as! [[String: Any]])[0]
+        return (content["text"] as! String, result["isError"] as! Bool)
+    }
+
+    private var yesterday: String {
+        let day = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        return day.formatted(.iso8601.year().month().day())
+    }
+
+    @Test func initializeSpeaksTheClientsVersion() {
+        let reply = send(["jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ["protocolVersion": "2025-06-18"]])
+        let result = reply["result"] as! [String: Any]
+        #expect(result["protocolVersion"] as? String == "2025-06-18")
+        #expect((result["serverInfo"] as? [String: Any])?["name"] as? String == "clocked")
+    }
+
+    @Test func notificationsGetNoReply() {
+        #expect(server.handle(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#) == nil)
+    }
+
+    @Test func readOnlyHidesAndRefusesWrites() {
+        prefs.claudeCanWrite = false
+        let reply = send(["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        let names = ((reply["result"] as! [String: Any])["tools"] as! [[String: Any]]).compactMap { $0["name"] as? String }
+        #expect(names.contains("get_summary"))
+        #expect(!names.contains("add_session"))
+        #expect(call("add_time", ["company": "acme", "minutes": 30]).isError)
+        #expect(store.sessions.isEmpty)
+    }
+
+    @Test func addSessionFindsTheCompanyByPartOfItsName() {
+        let result = call("add_session", ["company": "acme", "day": yesterday, "start": "9:00 AM", "end": "11:30", "note": "Pricing call"])
+        #expect(!result.isError)
+        let session = store.sessions.first!
+        #expect(session.companyID == acme.id)
+        #expect(session.duration(now: Date()) == 150 * 60)
+        #expect(session.source == .assistant)
+        #expect(session.note == "Pricing call")
+    }
+
+    @Test func overlapsAreRefused() {
+        _ = call("add_session", ["company": "Acme", "day": yesterday, "start": "09:00", "end": "11:00"])
+        let result = call("add_session", ["company": "Acme", "day": yesterday, "start": "10:00", "end": "12:00"])
+        #expect(result.isError)
+        #expect(result.text.contains("overlaps"))
+        #expect(store.sessions.count == 1)
+    }
+
+    @Test func unknownCompanySaysWhichThereAre() {
+        let result = call("add_time", ["company": "Globex", "minutes": 30])
+        #expect(result.isError)
+        #expect(result.text.contains("Acme Co, Northwind"))
+    }
+
+    @Test func changesCloseTogetherUndoAsOne() {
+        _ = call("add_session", ["company": "Acme", "day": yesterday, "start": "09:00", "end": "11:30"])
+        _ = call("adjust_day", ["company": "Northwind", "day": yesterday, "minutes": 20])
+        _ = call("add_time", ["company": "Northwind", "day": yesterday, "minutes": 120])
+        let change = try! #require(activity.current)
+        #expect(activity.title(for: change) == "Claude added 2 sessions and adjusted a day")
+        #expect(activity.summary(for: change) == "Acme Co 2:30 · Northwind 2:20")
+
+        activity.undo(change.id)
+        #expect(store.sessions.isEmpty)
+        #expect(store.adjustments.isEmpty)
+    }
+
+    @Test func undoPutsANoteBack() {
+        let session = store.addSession(companyID: acme.id, start: Date().addingTimeInterval(-7200), end: Date().addingTimeInterval(-3600), note: "Mine")
+        _ = call("update_session", ["session_id": session.id.uuidString, "note": "Claude's"])
+        #expect(store.session(session.id)?.note == "Claude's")
+        activity.undo(activity.current!.id)
+        #expect(store.session(session.id)?.note == "Mine")
+    }
+
+    @Test func summaryRoundsEachDay() {
+        prefs.roundingEnabled = true
+        prefs.roundingUnitMinutes = 60
+        prefs.roundUpAfterMinutes = 15
+        _ = call("add_session", ["company": "Acme", "day": yesterday, "start": "09:00", "end": "11:16"])
+        let result = call("get_summary", ["company": "Acme", "from": yesterday])
+        #expect(result.text.contains(#""billed" : "3:00""#))
+        #expect(result.text.contains(#""actual" : "2:16""#))
+    }
+}

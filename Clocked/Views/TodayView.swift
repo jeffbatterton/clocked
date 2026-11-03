@@ -449,6 +449,7 @@ private struct SessionBlock: View {
     @Binding var openSession: UUID?
 
     @Environment(TimeStore.self) private var store
+    @Environment(ClaudeActivity.self) private var activity: ClaudeActivity?
     @State private var draft = ""
     @State private var start = Date()
     @State private var end = Date()
@@ -504,8 +505,16 @@ private struct SessionBlock: View {
                 RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(color, lineWidth: 2)
                     .padding(-3)
+            } else if activity?.fresh.contains(session.id) == true {
+                // Just added or changed by Claude: a soft ring that fades after a few seconds.
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(color.opacity(0.45), lineWidth: 2)
+                    .padding(-3)
+                    .shadow(color: color.opacity(0.35), radius: 9)
+                    .transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.6), value: activity?.fresh.contains(session.id))
         .popover(
             isPresented: Binding(get: { isOpen && !inlineTimes }, set: { if !$0 { openSession = nil } }),
             arrowEdge: .bottom

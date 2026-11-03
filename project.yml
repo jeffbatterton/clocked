@@ -23,6 +23,23 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Clocked
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      # The MCP server command Claude runs, in Clocked.app/Contents/Helpers.
+      - target: clocked-mcp
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+  clocked-mcp:
+    type: tool
+    platform: macOS
+    sources: [ClockedMCP]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jeffbatterton.Clocked.mcp
+        ENABLE_HARDENED_RUNTIME: NO
+        SKIP_INSTALL: YES
   ClockedTests:
     type: bundle.unit-test
     platform: macOS

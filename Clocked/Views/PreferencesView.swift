@@ -7,10 +7,61 @@ struct PreferencesView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
 
+    @State private var pane: Pane = .general
+
+    enum Pane: String, CaseIterable, Identifiable {
+        case general, time, reminders, claude
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .time: "Time"
+            case .reminders: "Reminders"
+            case .claude: "Claude"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .general: "gearshape"
+            case .time: "clock"
+            case .reminders: "bell"
+            case .claude: "sparkles"
+            }
+        }
+    }
+
     var body: some View {
+        NavigationSplitView {
+            List(Pane.allCases, selection: $pane) { pane in
+                Label(pane.title, systemImage: pane.symbol).tag(pane)
+            }
+            .navigationSplitViewColumnWidth(170)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            Form { content(for: pane) }
+                .formStyle(.grouped)
+                .navigationTitle(pane.title)
+        }
+        .opensMainWindow()
+        .frame(width: 700, height: 500)
+        .alert(
+            "Couldn't change Launch at login",
+            isPresented: Binding(get: { loginError != nil }, set: { if !$0 { loginError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(loginError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func content(for pane: Pane) -> some View {
         @Bindable var prefs = prefs
 
-        Form {
+        switch pane {
+        case .general:
             Section {
                 Picker("Appearance", selection: $prefs.appearance) {
                     ForEach(AppearanceMode.allCases) { Text($0.title).tag($0) }
@@ -18,6 +69,25 @@ struct PreferencesView: View {
                 .pickerStyle(.segmented)
             }
 
+            Section {
+                Toggle(isOn: $prefs.showMenuBarItem) {
+                    Text("Show in menu bar")
+                    Text("Today's time and a Start/Stop button. Preferences is always in the Clocked menu (⌘,).")
+                }
+                Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+            }
+
+            Section {
+                Toggle(isOn: Binding(get: { prefs.testDrive }, set: { on in
+                    prefs.testDrive = on
+                    store.setTestDrive(on)
+                })) {
+                    Text("Test drive")
+                    Text("Fills Clocked with sample companies and time to try it out. Your own data is set aside, untouched, and comes back when you turn this off.")
+                }
+            }
+
+        case .time:
             Section {
                 Toggle(isOn: $prefs.roundingEnabled) {
                     Text("Round time")
@@ -51,20 +121,13 @@ struct PreferencesView: View {
                     Text("Timeline ends")
                     Text("Extends automatically if a timer runs later")
                 }
-            }
-
-            Section {
                 Picker("Week starts on", selection: $prefs.firstWeekday) {
                     Text("Sunday").tag(1)
                     Text("Monday").tag(2)
                 }
-                Toggle(isOn: $prefs.showMenuBarItem) {
-                    Text("Show in menu bar")
-                    Text("Today's time and a Start/Stop button. Preferences is always in the Clocked menu (⌘,).")
-                }
-                Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
             }
 
+        case .reminders:
             Section {
                 Toggle(isOn: Binding(get: { prefs.reminderEnabled }, set: { on in
                     prefs.reminderEnabled = on
@@ -79,26 +142,22 @@ struct PreferencesView: View {
                 .disabled(!prefs.reminderEnabled)
             }
 
+        case .claude:
+            ClaudeSection()
+
             Section {
-                Toggle(isOn: Binding(get: { prefs.testDrive }, set: { on in
-                    prefs.testDrive = on
-                    store.setTestDrive(on)
+                Toggle(isOn: Binding(get: { prefs.claudeCanWrite }, set: { on in
+                    prefs.claudeCanWrite = on
+                    NotificationCenter.default.post(name: .claudeToolsChanged, object: nil)
                 })) {
-                    Text("Test drive")
-                    Text("Fills Clocked with sample companies and time to try it out. Your own data is set aside, untouched, and comes back when you turn this off.")
+                    Text("Let Claude add and change time")
+                    Text("When off, Claude can read your time but not change it")
+                }
+                Toggle(isOn: $prefs.showClaudeChanges) {
+                    Text("Show what Claude changes")
+                    Text("A notice with Undo, in the window or as a notification")
                 }
             }
-        }
-        .formStyle(.grouped)
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
-        .alert(
-            "Couldn't change Launch at login",
-            isPresented: Binding(get: { loginError != nil }, set: { if !$0 { loginError = nil } })
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(loginError ?? "")
         }
     }
 
